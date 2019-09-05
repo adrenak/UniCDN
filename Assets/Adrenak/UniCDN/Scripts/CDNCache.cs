@@ -7,6 +7,8 @@ using UnityEngine;
 
 namespace Adrenak.UniCDN {
 	public class CDNCache {
+		const string TAG = "[CDN_CACHE]";
+
 		public class Config {
 			public string rootDir;
 
@@ -23,9 +25,10 @@ namespace Adrenak.UniCDN {
 				return source.Task;
 			}
 		}
+
+		public bool enableLogging;
 		public Config config;
 		public IDownloader m_Downloader { get; private set; }
-
 
 		// ================================================
 		// INITIALIZATION
@@ -52,23 +55,30 @@ namespace Adrenak.UniCDN {
 
 		public async void GetLocalVersion(string subPath, Action<string> onSuccess, Action<Exception> onFailure) {
 			try {
-				var fullPath = config.rootDir.AppendPath(subPath);
-				var fileName = Path.GetFileName(fullPath);
+				var filePath = GetFullFromSubPath(subPath);
+				var fileName = Path.GetFileName(filePath);
 
-				var versionFileName = await config.GetVersionFileName(fileName);
-				var versionFilePath = fullPath.Replace(fileName, versionFileName);
+				var verFileName = await GetVerFileNameFromFileName(fileName);
+				var verFilePath = GetVerFilePath(filePath, verFileName);
 
-				if (!File.Exists(versionFilePath))
-					onSuccess?.Invoke(string.Empty);
+				// If either file is not present, we delete both and return null
+				if (!File.Exists(verFilePath) || !File.Exists(filePath)) {
+					if (File.Exists(verFilePath)) await FileX.DeleteAsync(verFilePath);
+					if (File.Exists(filePath)) await FileX.DeleteAsync(filePath);
 
-				using (var reader = File.OpenText(versionFilePath)) {
+					onSuccess?.Invoke(null);
+				}
+
+				using (var reader = File.OpenText(verFilePath)) {
 					var fileText = await reader.ReadToEndAsync();
 
 					reader.Close();
+					Log("Fetched local version for " + subPath + ". Version is " + fileText);
 					onSuccess?.Invoke(fileText);
 				}
 			}
 			catch (Exception e) {
+				LogError("Could not fetch local version for " + subPath + " --> " + e);
 				onFailure?.Invoke(e);
 			}
 		}
@@ -84,15 +94,18 @@ namespace Adrenak.UniCDN {
 
 		public async void SetLocalVersion(string subPath, string version, Action onSuccess, Action<Exception> onFailure) {
 			try {
-				var fullPath = config.rootDir.AppendPath(subPath);
-				var fileName = Path.GetFileName(fullPath);
+				var filePath = GetFullFromSubPath(subPath);
+				var fileName = Path.GetFileName(filePath);
 
-				var versionFileName = await config.GetVersionFileName(fileName);
-				var versionFilePath = fullPath.Replace(fileName, versionFileName);
+				var verFileName = await GetVerFileNameFromFileName(fileName);
+				var verFilePath = GetVerFilePath(filePath, verFileName);
 
-				File.WriteAllText(versionFilePath, version);
+				File.WriteAllText(verFilePath, version);
+				Log("Version for " + subPath + " set to " + version);
+				onSuccess?.Invoke();
 			}
 			catch (Exception e) {
+				LogError("Could not set version for " + subPath + " --> " + e);
 				onFailure?.Invoke(e);
 			}
 		}
@@ -111,19 +124,21 @@ namespace Adrenak.UniCDN {
 			return source.Task;
 		}
 
-		public async void GetRemoteVersion(string remoteSubPath, Action<string> onSuccess, Action<Exception> onFailure) {
+		public async void GetRemoteVersion(string subPath, Action<string> onSuccess, Action<Exception> onFailure) {
 			try {
-				var fullPath = config.rootDir.AppendPath(remoteSubPath);
+				var fullPath = GetFullFromSubPath(subPath);
 				var fileName = Path.GetFileName(fullPath);
-				var versionFileName = await config.GetVersionFileName(fileName);
-				var versionSubPath = remoteSubPath.Replace(fileName, versionFileName);
+				var verFileName = await GetVerFileNameFromFileName(fileName);
+				var verSubPath = subPath.Replace(fileName, verFileName);
 
-				var versionFileURL = await m_Downloader.GetURL(versionSubPath);
-				var bytes = await m_Downloader.Download(versionFileURL);
+				var verFileURL = await m_Downloader.GetURL(verSubPath);
+				var bytes = await m_Downloader.Download(verFileURL);
 				var version = Encoding.UTF8.GetString(bytes);
+				Log("Remote version for " + subPath + " is " + version);
 				onSuccess?.Invoke(version);
 			}
 			catch (Exception e) {
+				LogError("Could not fetch remote version for " + subPath);
 				onFailure?.Invoke(e);
 			}
 		}
@@ -157,13 +172,14 @@ namespace Adrenak.UniCDN {
 
 				bool areVersionsEqual = localVersion.Equals(remoteVersion);
 				if (!areVersionsEqual) {
+					Log(localSubPath + " is not up to date. Local version is " + localVersion + ". Remote version is " + remoteVersion);
 					onSuccess?.Invoke(false);
 					return;
 				}
-
 				onSuccess?.Invoke(File.Exists(config.rootDir.AppendPath(localSubPath)));
 			}
 			catch (Exception e) {
+				LogError("Could not perform consistency check. --> " + e);
 				onFailure?.Invoke(e);
 			}
 		}
@@ -174,23 +190,28 @@ namespace Adrenak.UniCDN {
 		// ================================================
 		#region LOCAL_FILE
 		// READ
-		public UniTask<object[]> ReadLocalFile(string localSubPath) {
-			var source = new UniTaskCompletionSource<object[]>();
+		public class ReadLocalFileResult {
+			public byte[] bytes;
+			public string version;
+		}
+
+		public UniTask<ReadLocalFileResult> ReadLocalFile(string localSubPath) {
+			var source = new UniTaskCompletionSource<ReadLocalFileResult>();
 			ReadLocalFile(localSubPath,
 				result => source.TrySetResult(result),
 				error => source.TrySetException(error)
 			);
 			return source.Task;
 		}
-		
-		public async void ReadLocalFile(string localSubPath, Action<object[]> onSuccess, Action<Exception> onFailure) {
-			try {
-				var filePath = config.rootDir.AppendPath(localSubPath);
-				var fileName = Path.GetFileName(filePath);
-				var versionFileName = await config.GetVersionFileName(fileName);
-				var versionFilePath = filePath.Replace(fileName, versionFileName);
 
-				using(var versionFileStream = File.OpenRead(versionFilePath))
+		public async void ReadLocalFile(string subPath, Action<ReadLocalFileResult> onSuccess, Action<Exception> onFailure) {
+			try {
+				var filePath = GetFullFromSubPath(subPath);
+				var fileName = Path.GetFileName(filePath);
+				var verFileName = await GetVerFileNameFromFileName(fileName);
+				var verFilePath = GetVerFilePath(filePath, verFileName);
+
+				using (var versionFileStream = File.OpenRead(verFilePath))
 				using (var fileStream = File.OpenRead(filePath)) {
 					var fileBuffer = new byte[fileStream.Length];
 					var versionFileBuffer = new byte[versionFileStream.Length];
@@ -203,10 +224,16 @@ namespace Adrenak.UniCDN {
 
 					versionFileStream.Close();
 					fileStream.Close();
-					onSuccess?.Invoke(new object[] { fileBuffer, version });
+					Log("Finished reading from " + subPath + " and its version file");
+					var result = new ReadLocalFileResult {
+						bytes = fileBuffer,
+						version = version
+					};
+					onSuccess?.Invoke(result);
 				}
 			}
 			catch (Exception e) {
+				LogError("Could not read file and/or version files for " + subPath);
 				onFailure?.Invoke(e);
 			}
 		}
@@ -223,13 +250,13 @@ namespace Adrenak.UniCDN {
 
 		public async void WriteLocalFile(string subPath, byte[] bytes, string version, Action onSuccess, Action<Exception> onFailure) {
 			try {
-				var filePath = config.rootDir.AppendPath(subPath);
+				var filePath = GetFullFromSubPath(subPath);
 				var fileName = Path.GetFileName(filePath);
 				var fileDir = filePath.Replace(fileName, string.Empty);
 				Directory.CreateDirectory(fileDir);
 
-				var versionFileName = await config.GetVersionFileName(fileName);
-				var versionFilePath = filePath.Replace(fileName, versionFileName);
+				var versionFileName = await GetVerFileNameFromFileName(fileName);
+				var versionFilePath = GetVerFilePath(filePath, versionFileName);
 
 				using (var fileStream = File.OpenWrite(filePath))
 				using (var versionFileStream = File.OpenWrite(versionFilePath)) {
@@ -241,10 +268,13 @@ namespace Adrenak.UniCDN {
 					await Task.WhenAll(fileWrite, versionFileWrite);
 					fileStream.Close();
 					versionFileStream.Close();
+
+					Log("Wrote to " + subPath + " and its version file");
 					onSuccess?.Invoke();
 				}
 			}
-			catch(Exception e) {
+			catch (Exception e) {
+				LogError("Could not write to " + subPath + " and/or its version file");
 				onFailure?.Invoke(e);
 			}
 		}
@@ -259,26 +289,27 @@ namespace Adrenak.UniCDN {
 			return source.Task;
 		}
 
-		public async void DeleteLocalFile(string localSubPath, Action<bool> onSuccess, Action<Exception> onFailure) {
+		public async void DeleteLocalFile(string subPath, Action<bool> onSuccess, Action<Exception> onFailure) {
 			try {
-				var filePath = config.rootDir.AppendPath(localSubPath);
+				var filePath = GetFullFromSubPath(subPath);
 				var fileName = Path.GetFileName(filePath);
-				var versionFileName = await config.GetVersionFileName(fileName);
-				var versionFilePath = filePath.Replace(fileName, versionFileName);
+				var verFileName = await GetVerFileNameFromFileName(fileName);
+				var verFilePath = GetVerFilePath(filePath, verFileName);
 
 				if (!File.Exists(filePath)) {
 					onSuccess?.Invoke(false);
 					return;
 				}
 
-				if (!File.Exists(versionFilePath)) {
+				if (!File.Exists(verFilePath)) {
 					onSuccess?.Invoke(false);
 					return;
 				}
 
 				var fileDeletion = FileX.DeleteAsync(filePath);
-				var versionFileDeletion = FileX.DeleteAsync(versionFilePath);
+				var versionFileDeletion = FileX.DeleteAsync(verFilePath);
 				await Task.WhenAll(fileDeletion, versionFileDeletion);
+				Log("Deleted file and version file for " + subPath);
 				onSuccess?.Invoke(true);
 			}
 			catch (Exception e) {
@@ -286,40 +317,42 @@ namespace Adrenak.UniCDN {
 			}
 		}
 		#endregion
-		
+
 		// ================================================
 		// UPDATE
 		// ================================================
 		#region UPDATE
-		public UniTask<bool> Update(string commonSubPath) {
-			return Update(commonSubPath, commonSubPath);
+		public UniTask<bool> UpdateFile(string commonSubPath) {
+			return UpdateFile(commonSubPath, commonSubPath);
 		}
 
-		public UniTask<bool> Update(string localSubPath, string remoteSubPath) {
+		public UniTask<bool> UpdateFile(string localSubPath, string remoteSubPath) {
 			var source = new UniTaskCompletionSource<bool>();
-			Update(localSubPath, remoteSubPath,
+			UpdateFile(localSubPath, remoteSubPath,
 				result => source.TrySetResult(result),
 				error => source.TrySetException(error)
 			);
 			return source.Task;
 		}
 
-		public void Update(string commonSubPath, Action<bool> onSuccess, Action<Exception> onFailure) {
-			Update(commonSubPath, commonSubPath, onSuccess, onFailure);
+		public void UpdateFile(string commonSubPath, Action<bool> onSuccess, Action<Exception> onFailure) {
+			UpdateFile(commonSubPath, commonSubPath, onSuccess, onFailure);
 		}
 
-		public async void Update(string localSubPath, string remoteSubPath, Action<bool> onSuccess, Action<Exception> onFailure) {
+		public async void UpdateFile(string localSubPath, string remoteSubPath, Action<bool> onSuccess, Action<Exception> onFailure) {
 			try {
-
+				// Check if the file is up to date
 				var isUpToDate = await IsUpToDate(localSubPath);
 				if (isUpToDate) {
 					onSuccess?.Invoke(false);
 					return;
 				}
-				
+
 				// Download the new file
 				var url = await m_Downloader.GetURL(remoteSubPath);
+				Log("Downloading file from " + url);
 				var bytes = await m_Downloader.Download(url);
+				Log("Downloaded finished from " + url);
 
 				// Delete the existing files
 				await DeleteLocalFile(localSubPath);
@@ -327,12 +360,40 @@ namespace Adrenak.UniCDN {
 				// Write the new files
 				var remoteVersion = await GetRemoteVersion(remoteSubPath);
 				await WriteLocalFile(localSubPath, bytes, remoteVersion);
+				Log("Updated " + localSubPath);
 				onSuccess?.Invoke(true);
 			}
 			catch (Exception e) {
+				LogError("Error updating " + localSubPath + " --> " + e);
 				onFailure?.Invoke(e);
 			}
 		}
 		#endregion
+
+		// ================================================
+		// HELPERS
+		// ================================================
+		void Log(object msg) {
+			if (enableLogging)
+				Console.Out.Log(TAG, msg);
+		}
+
+		void LogError(object error) {
+			if (enableLogging)
+				Console.Out.LogError(TAG, error);
+		}
+
+		string GetFullFromSubPath(string subPath) {
+			return config.rootDir.AppendPath(subPath);
+		}
+
+		UniTask<string> GetVerFileNameFromFileName(string fileName) {
+			return config.GetVersionFileName(fileName);
+		}
+
+		string GetVerFilePath(string filePath, string versionFileName) {
+			var fileName = Path.GetFileName(filePath);
+			return filePath.Replace(fileName, versionFileName);
+		}
 	}
 }

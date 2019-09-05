@@ -1,6 +1,5 @@
 ﻿using System;
 using UniRx.Async;
-using UnityEngine;
 
 namespace Adrenak.UniCDN {
 	public interface IDownloader {

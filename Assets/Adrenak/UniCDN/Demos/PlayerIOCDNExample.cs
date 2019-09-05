@@ -6,7 +6,7 @@ public class PlayerIOCDNExample : MonoBehaviour {
 	CDNCache m_Cache = new CDNCache();
 
 	async void Start() {
-		var downloader = DownloaderBuilder.Build(Provider.PlayerIO);
+		var downloader = DownloaderFactory.Build(Provider.PlayerIO);
 		var config = new CDNCache.Config {
 			rootDir = Application.persistentDataPath + "/PlayerIOCDNExample/",
 			versionFileNomenclatureMethod = (fileName, onSuccess, onFailure) => 
@@ -24,7 +24,7 @@ public class PlayerIOCDNExample : MonoBehaviour {
 
 	public async void UpdateFile(string fileName) {
 		try {
-			var result = await m_Cache.Update(fileName);
+			var result = await m_Cache.UpdateFile(fileName);
 			if (result) {
 				var version = await m_Cache.GetLocalVersion(fileName);
 				Debug.Log(fileName + " updated to latest version" + version);

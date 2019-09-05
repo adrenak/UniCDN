@@ -90,7 +90,8 @@ namespace Adrenak.UniCDN {
 		public void Download(string url, Action<byte[]> onSuccess, Action<Exception> onFailure) {
 			var client = new RestClient();
 			var request = new RestRequest(url);
-			client.ExecuteAsync(request)
+
+			var handler = client.ExecuteAsync(request)
 				.Then(response => {
 					if (response.IsSuccess())
 						Dispatcher.Enqueue(() => onSuccess?.Invoke(response.RawBytes));
