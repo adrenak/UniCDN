@@ -1,5 +1,5 @@
 ## UniCDN
-A CDN adapter for Unity. _Under development_
+A CDN adapter for Unity.
 
 ## Intro
 - Allows you to use content delivery networks using `async/await`  
@@ -9,7 +9,7 @@ A CDN adapter for Unity. _Under development_
 ### Downloaders
 - `Provider` enumerates all the CDN provides available to UniCDN. Add new values as required.
 - `IDownloader` acts as the interface for classes from downloading from different CDN providers
-- `DownloaderFactory` creates concrete implementations of `IDownloader`
+- `DownloaderFactory` creates concrete implementations of `IDownloader` using `.Create`
 - The following methods are provided by `IDownloader`, and hence, any implementation of the interface:
     - `Init` for initializing any SDKs, authenticating connections, obtaining tokens. In other words, whatever a provider needs before it can be used.
     - `GetURL` for obtaining the CDN download URL using a file name
@@ -38,8 +38,9 @@ The `CDNCache.Config` allows you to set the require parameters for this feature 
   
 ### Adding new providers
 Presently the project supports PlayerIO GameFS CDN. If you want to add your own, follow these steps:
-- Add a new value in `Provider` enum
 - Implement `IDownloader` for your platform of choice
+- Add a new value in `Provider` enum
+- Add ability to create the new `Provider` in the `DownloaderFactory`
 
 If you have trouble adding support for a new service, or UniCDN does not provide the means to configure or use it, please open an issue.
 

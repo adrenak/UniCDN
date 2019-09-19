@@ -1,6 +1,6 @@
 ﻿namespace Adrenak.UniCDN {
 	public static class DownloaderFactory {
-		public static IDownloader Build(Provider provider) {
+		public static IDownloader Create(Provider provider) {
 			switch (provider) {
 				case Provider.PlayerIO:
 					return new PlayerIODownloader();

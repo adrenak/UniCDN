@@ -6,7 +6,7 @@ public class PlayerIOCDNExample : MonoBehaviour {
 	CDNCache m_Cache = new CDNCache();
 
 	async void Start() {
-		var downloader = DownloaderFactory.Build(Provider.PlayerIO);
+		var downloader = DownloaderFactory.Create(Provider.PlayerIO);
 		var config = new CDNCache.Config {
 			rootDir = Application.persistentDataPath + "/PlayerIOCDNExample/",
 			versionFileNomenclatureMethod = (fileName, onSuccess, onFailure) => 

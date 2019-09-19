@@ -94,9 +94,11 @@ namespace Adrenak.UniCDN {
 			var handler = client.ExecuteAsync(request)
 				.Then(response => {
 					if (response.IsSuccess())
-						Dispatcher.Enqueue(() => onSuccess?.Invoke(response.RawBytes));
+						onSuccess?.Invoke(response.RawBytes);
+					//Dispatcher.Enqueue(() => onSuccess?.Invoke(response.RawBytes));
 					else
-						Dispatcher.Enqueue(() => onFailure?.Invoke(response.GetException()));
+						onFailure?.Invoke(response.GetException());
+					//Dispatcher.Enqueue(() => onFailure?.Invoke(response.GetException()));
 				})
 				.Catch(error => Dispatcher.Enqueue(() => onFailure?.Invoke(error)));
 		}

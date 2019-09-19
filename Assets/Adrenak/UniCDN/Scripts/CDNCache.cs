@@ -28,7 +28,7 @@ namespace Adrenak.UniCDN {
 
 		public bool enableLogging;
 		public Config config;
-		public IDownloader m_Downloader { get; private set; }
+		public IDownloader Downloader { get; private set; }
 
 		// ================================================
 		// INITIALIZATION
@@ -36,8 +36,8 @@ namespace Adrenak.UniCDN {
 		public UniTask Init(Config config, IDownloader downloader) {
 			this.config = config;
 			Directory.CreateDirectory(config.rootDir);
-			m_Downloader = downloader;
-			return m_Downloader.Init(null);
+			Downloader = downloader;
+			return Downloader.Init(null);
 		}
 
 		// ================================================
@@ -66,7 +66,8 @@ namespace Adrenak.UniCDN {
 					if (File.Exists(verFilePath)) await FileX.DeleteAsync(verFilePath);
 					if (File.Exists(filePath)) await FileX.DeleteAsync(filePath);
 
-					onSuccess?.Invoke(null);
+					onSuccess?.Invoke(string.Empty);
+					return;
 				}
 
 				using (var reader = File.OpenText(verFilePath)) {
@@ -118,28 +119,27 @@ namespace Adrenak.UniCDN {
 		public UniTask<string> GetRemoteVersion(string remoteSubPath) {
 			var source = new UniTaskCompletionSource<string>();
 			GetRemoteVersion(remoteSubPath,
-				result => source.TrySetResult(result),
-				error => source.TrySetException(error)
+				result => source.TrySetResult(result)
 			);
 			return source.Task;
 		}
 
-		public async void GetRemoteVersion(string subPath, Action<string> onSuccess, Action<Exception> onFailure) {
+		public async void GetRemoteVersion(string subPath, Action<string> callback) {
 			try {
 				var fullPath = GetFullFromSubPath(subPath);
 				var fileName = Path.GetFileName(fullPath);
 				var verFileName = await GetVerFileNameFromFileName(fileName);
 				var verSubPath = subPath.Replace(fileName, verFileName);
 
-				var verFileURL = await m_Downloader.GetURL(verSubPath);
-				var bytes = await m_Downloader.Download(verFileURL);
+				var verFileURL = await Downloader.GetURL(verSubPath);
+				var bytes = await Downloader.Download(verFileURL);
 				var version = Encoding.UTF8.GetString(bytes);
 				Log("Remote version for " + subPath + " is " + version);
-				onSuccess?.Invoke(version);
+				callback?.Invoke(version);
 			}
 			catch (Exception e) {
 				LogError("Could not fetch remote version for " + subPath);
-				onFailure?.Invoke(e);
+				callback?.Invoke(string.Empty);
 			}
 		}
 		#endregion
@@ -161,8 +161,8 @@ namespace Adrenak.UniCDN {
 			return source.Task;
 		}
 
-		public void IsUpToDate(string commonSubPateh, Action<bool> onSuccess, Action<Exception> onFailure) {
-			IsUpToDate(commonSubPateh, commonSubPateh, onSuccess, onFailure);
+		public void IsUpToDate(string commonSubPath, Action<bool> onSuccess, Action<Exception> onFailure) {
+			IsUpToDate(commonSubPath, commonSubPath, onSuccess, onFailure);
 		}
 
 		public async void IsUpToDate(string localSubPath, string remoteSubPath, Action<bool> onSuccess, Action<Exception> onFailure) {
@@ -170,13 +170,28 @@ namespace Adrenak.UniCDN {
 				var localVersion = await GetLocalVersion(localSubPath);
 				var remoteVersion = await GetRemoteVersion(remoteSubPath);
 
-				bool areVersionsEqual = localVersion.Equals(remoteVersion);
+				bool areVersionsEqual;
+				if (!File.Exists(config.rootDir.AppendPath(localSubPath))) {
+					Console.Out.Log(TAG, "Subpath file " + localSubPath + " does not exist.");
+					areVersionsEqual = false;
+				}
+				else if (localVersion == string.Empty) {
+					Console.Out.Log(TAG, "Local version for " + localSubPath + " does not exist.");
+					areVersionsEqual = false;
+				}
+				else if(remoteVersion == string.Empty) {
+					Console.Out.Log(TAG, "Remote version for " + remoteSubPath + " does not exist.");
+					areVersionsEqual = false;
+				}
+				else
+					areVersionsEqual = localVersion.Equals(remoteVersion);
+
 				if (!areVersionsEqual) {
-					Log(localSubPath + " is not up to date. Local version is " + localVersion + ". Remote version is " + remoteVersion);
+					Log(localSubPath + " is not up to date. Local version is " + localVersion + ". Remote version is " + remoteVersion + "...IsUpToDate = false");
 					onSuccess?.Invoke(false);
 					return;
 				}
-				onSuccess?.Invoke(File.Exists(config.rootDir.AppendPath(localSubPath)));
+				onSuccess?.Invoke(true);
 			}
 			catch (Exception e) {
 				LogError("Could not perform consistency check. --> " + e);
@@ -206,6 +221,12 @@ namespace Adrenak.UniCDN {
 
 		public async void ReadLocalFile(string subPath, Action<ReadLocalFileResult> onSuccess, Action<Exception> onFailure) {
 			try {
+				var isIntact = await IsLocalFileIntact(subPath);
+				if (!isIntact) {
+					onFailure?.Invoke(new Exception("File and version files were not intact"));
+					return;
+				}
+
 				var filePath = GetFullFromSubPath(subPath);
 				var fileName = Path.GetFileName(filePath);
 				var verFileName = await GetVerFileNameFromFileName(fileName);
@@ -220,10 +241,12 @@ namespace Adrenak.UniCDN {
 					var versionFileRead = versionFileStream.ReadAsync(versionFileBuffer, 0, versionFileBuffer.Length);
 
 					await Task.WhenAll(fileRead, versionFileRead);
-					var version = Encoding.UTF8.GetString(versionFileBuffer);
 
-					versionFileStream.Close();
 					fileStream.Close();
+
+					var version = Encoding.UTF8.GetString(versionFileBuffer);
+					versionFileStream.Close();
+
 					Log("Finished reading from " + subPath + " and its version file");
 					var result = new ReadLocalFileResult {
 						bytes = fileBuffer,
@@ -296,20 +319,10 @@ namespace Adrenak.UniCDN {
 				var verFileName = await GetVerFileNameFromFileName(fileName);
 				var verFilePath = GetVerFilePath(filePath, verFileName);
 
-				if (!File.Exists(filePath)) {
-					onSuccess?.Invoke(false);
-					return;
-				}
+				Log("Deleting any file and version file for " + subPath);
+				if (File.Exists(filePath)) await FileX.DeleteAsync(filePath);
+				if (File.Exists(verFilePath)) await FileX.DeleteAsync(verFilePath);
 
-				if (!File.Exists(verFilePath)) {
-					onSuccess?.Invoke(false);
-					return;
-				}
-
-				var fileDeletion = FileX.DeleteAsync(filePath);
-				var versionFileDeletion = FileX.DeleteAsync(verFilePath);
-				await Task.WhenAll(fileDeletion, versionFileDeletion);
-				Log("Deleted file and version file for " + subPath);
 				onSuccess?.Invoke(true);
 			}
 			catch (Exception e) {
@@ -341,26 +354,29 @@ namespace Adrenak.UniCDN {
 
 		public async void UpdateFile(string localSubPath, string remoteSubPath, Action<bool> onSuccess, Action<Exception> onFailure) {
 			try {
-				// Check if the file is up to date
-				var isUpToDate = await IsUpToDate(localSubPath);
+				Log("Checking if " + localSubPath + " is up to date with " + remoteSubPath);
+				var isUpToDate = await IsUpToDate(localSubPath, remoteSubPath);
 				if (isUpToDate) {
 					onSuccess?.Invoke(false);
 					return;
 				}
 
 				// Download the new file
-				var url = await m_Downloader.GetURL(remoteSubPath);
+				var url = await Downloader.GetURL(remoteSubPath);
 				Log("Downloading file from " + url);
-				var bytes = await m_Downloader.Download(url);
-				Log("Downloaded finished from " + url);
+				var bytes = await Downloader.Download(url);
+				Log("Downloaded file from " + url);
 
 				// Delete the existing files
 				await DeleteLocalFile(localSubPath);
+				await UniTask.Delay(100);
 
 				// Write the new files
 				var remoteVersion = await GetRemoteVersion(remoteSubPath);
 				await WriteLocalFile(localSubPath, bytes, remoteVersion);
+				await UniTask.Delay(100);
 				Log("Updated " + localSubPath);
+
 				onSuccess?.Invoke(true);
 			}
 			catch (Exception e) {
@@ -383,7 +399,20 @@ namespace Adrenak.UniCDN {
 				Console.Out.LogError(TAG, error);
 		}
 
-		string GetFullFromSubPath(string subPath) {
+		async UniTask<bool> IsLocalFileIntact(string subPath) {
+			var filePath = GetFullFromSubPath(subPath);
+			var fileName = Path.GetFileName(filePath);
+			var verFileName = await GetVerFileNameFromFileName(fileName);
+			var verFilePath = GetVerFilePath(filePath, verFileName);
+			if (!File.Exists(filePath) || !File.Exists(verFilePath)) {
+				if (File.Exists(filePath)) await FileX.DeleteAsync(filePath);
+				if (File.Exists(verFilePath)) await FileX.DeleteAsync(verFilePath);
+				return false;
+			}
+			return true;
+		}
+
+		public string GetFullFromSubPath(string subPath) {
 			return config.rootDir.AppendPath(subPath);
 		}
 
